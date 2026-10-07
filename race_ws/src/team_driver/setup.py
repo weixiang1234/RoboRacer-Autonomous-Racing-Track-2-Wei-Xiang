@@ -24,9 +24,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            # Keep this entry: the judges run `ros2 run team_driver driver`.
-            # Add more of your own alongside it if you like.
             'driver = team_driver.driver:main',
+            'map_viewer = team_driver.map_viewer:main',
         ],
     },
 )

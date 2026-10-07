@@ -108,8 +108,48 @@ class Driver(Node):
         self.declare_parameter('crawl_throttle', 0.12)    # [-1, 1], open loop
         self.declare_parameter('max_range', 10.0)         # [m] clip the scan here
 
+        self.declare_parameter(
+            'centerline_csv',
+            '/hackathon/maps/icra26_compete_centerline.csv'
+        )
+        self.declare_parameter('lookahead_distance', 0.75)
+        self.declare_parameter('target_speed', 2.0)
+
         self.crawl_throttle = self.get_parameter('crawl_throttle').value
         self.max_range = self.get_parameter('max_range').value
+
+        self.lookahead_distance = float(
+            self.get_parameter('lookahead_distance').value
+        )
+        self.target_speed = float(
+            self.get_parameter('target_speed').value
+        )
+
+        centerline_path = str(
+            self.get_parameter('centerline_csv').value
+        )
+
+        try:
+            route = np.loadtxt(
+                centerline_path,
+                delimiter=',',
+                comments='#',
+                dtype=np.float64,
+            )
+
+            self.route = route[:, :2]
+
+            self.get_logger().info(
+                f'Loaded centerline: {len(self.route)} points '
+                f'from {centerline_path}'
+            )
+
+        except Exception as exc:
+            self.route = None
+
+            self.get_logger().error(
+                f'Failed to load centerline: {exc}'
+            )
 
         ns = str(self.get_parameter('vehicle_ns').value).rstrip('/')
         qos = devkit_qos()
@@ -120,7 +160,8 @@ class Driver(Node):
 
         self.create_subscription(LaserScan, f'{ns}/lidar', self.scan_callback, qos)
         self.create_subscription(Odometry, f'{ns}/odom', self.odom_callback, qos)
-        self.create_subscription(Point, f'{ns}/ips', self.ips_callback, qos)
+        # Pure Pursuit uses /odom only.
+        # self.create_subscription(Point, f'{ns}/ips', self.ips_callback, qos)
 
         # Latest known pose and speed. Ground truth from the simulator, which
         # the hackathon rules allow you to use - so use it.
@@ -177,25 +218,205 @@ class Driver(Node):
     # THIS IS THE PART YOU WRITE.
     # ==================================================================
     def plan(self, ranges, angles):
-        """Decide what the car should do, given the latest scan.
+        """Track the supplied centreline using Pure Pursuit."""
 
-        Returns `(steering, throttle)`, both normalised to [-1, 1]. Steering
-        is a fraction of full lock (MAX_STEERING_RAD); throttle is torque, not
-        speed.
+        if self.position is None or self.route is None:
+            return 0.0, 0.0
 
-        Right now it returns "straight ahead, slowly", which is not driving:
-        it ignores `ranges` entirely, so the car will hold its heading off the
-        line and put itself into the first barrier it meets. Replace the whole
-        method.
+        x, y = self.position
+        n = len(self.route)
 
-        You have more to work with than the scan. `self.position`, `self.yaw`
-        and `self.speed` are ground truth from /odom and are yours to use, and
-        nothing stops you subscribing to more topics, loading a map or a line
-        you computed offline, or running a policy you trained. See
-        docs/04-algorithms.md for the approaches and what each one needs.
-        """
-        return 0.0, self.crawl_throttle
+        if n < 2:
+            return 0.0, 0.0
 
+        # ----------------------------------------------------------
+        # 1. Find nearest route point.
+        # ----------------------------------------------------------
+        dx_all = self.route[:, 0] - x
+        dy_all = self.route[:, 1] - y
+
+        dist_sq = (
+            dx_all * dx_all
+            + dy_all * dy_all
+        )
+
+        nearest_index = int(
+            np.argmin(dist_sq)
+        )
+
+        # ----------------------------------------------------------
+        # 2. Walk forward along the closed route until lookahead.
+        # ----------------------------------------------------------
+        accumulated = 0.0
+        current_index = nearest_index
+        target_index = None
+
+        cos_yaw = math.cos(self.yaw)
+        sin_yaw = math.sin(self.yaw)
+
+        for _ in range(n):
+
+            next_index = (
+                current_index + 1
+            ) % n
+
+            segment_dx = (
+                self.route[next_index, 0]
+                - self.route[current_index, 0]
+            )
+
+            segment_dy = (
+                self.route[next_index, 1]
+                - self.route[current_index, 1]
+            )
+
+            accumulated += math.hypot(
+                segment_dx,
+                segment_dy,
+            )
+
+            current_index = next_index
+
+            if accumulated < self.lookahead_distance:
+                continue
+
+            tx = self.route[current_index, 0]
+            ty = self.route[current_index, 1]
+
+            dx = tx - x
+            dy = ty - y
+
+            local_x = (
+                cos_yaw * dx
+                + sin_yaw * dy
+            )
+
+            if local_x > 0.05:
+                target_index = current_index
+                break
+
+        if target_index is None:
+            return 0.0, 0.0
+
+        # ----------------------------------------------------------
+        # 3. Target point in vehicle coordinates.
+        # ----------------------------------------------------------
+        target_x = self.route[target_index, 0]
+        target_y = self.route[target_index, 1]
+
+        dx = target_x - x
+        dy = target_y - y
+
+        local_x = (
+            cos_yaw * dx
+            + sin_yaw * dy
+        )
+
+        local_y = (
+            -sin_yaw * dx
+            + cos_yaw * dy
+        )
+
+        lookahead_sq = (
+            local_x * local_x
+            + local_y * local_y
+        )
+
+        if lookahead_sq < 1e-6:
+            return 0.0, 0.0
+
+        # ----------------------------------------------------------
+        # 4. Pure Pursuit.
+        #
+        # Track 2 wheelbase = 0.324 m.
+        # ----------------------------------------------------------
+        curvature = (
+            2.0 * local_y
+            / lookahead_sq
+        )
+
+        steering_angle = math.atan(
+            0.324 * curvature
+        )
+
+        # Conservative first test.
+        steering_angle = float(
+            np.clip(
+                steering_angle,
+                -0.50,
+                0.50,
+            )
+        )
+
+        # AutoDRIVE wants normalised steering.
+        steering = (
+            steering_angle
+            / MAX_STEERING_RAD
+        )
+
+        steering = float(
+            np.clip(
+                steering,
+                -1.0,
+                1.0,
+            )
+        )
+
+        # ----------------------------------------------------------
+        # 5. Speed controller.
+        #
+        # AutoDRIVE takes throttle, not target speed.
+        # Use feed-forward + proportional correction initially.
+        # ----------------------------------------------------------
+        speed_error = (
+            self.target_speed
+            - self.speed
+        )
+
+        if speed_error < -0.20:
+            # Slight overspeed: coast instead of braking.
+            throttle = 0.0
+
+        else:
+            feedforward = (
+                0.05 * self.target_speed
+            )
+
+            throttle = (
+                feedforward
+                + 0.12 * speed_error
+            )
+
+            throttle = float(
+                np.clip(
+                    throttle,
+                    0.0,
+                    0.25,
+                )
+            )
+
+        # ----------------------------------------------------------
+        # Diagnostics at about 4 Hz.
+        # ----------------------------------------------------------
+        if self._marker_divisor == 0:
+
+            cte = math.sqrt(
+                float(
+                    dist_sq[nearest_index]
+                )
+            )
+
+            self.get_logger().info(
+                f'PP nearest={nearest_index}, '
+                f'target={target_index}, '
+                f'cte={cte:.2f}m, '
+                f'v={self.speed:.2f}, '
+                f'v_target={self.target_speed:.2f}, '
+                f'steer={steering:+.2f}, '
+                f'throttle={throttle:.2f}'
+            )
+
+        return steering, throttle
     # ------------------------------------------------------------------
     # Output
     # ------------------------------------------------------------------
