@@ -113,7 +113,7 @@ class Driver(Node):
             '/hackathon/maps/icra26_compete_centerline.csv'
         )
         self.declare_parameter('lookahead_distance', 0.75)
-        self.declare_parameter('target_speed', 2.0)
+        self.declare_parameter('target_speed', 2.8)
 
         self.crawl_throttle = self.get_parameter('crawl_throttle').value
         self.max_range = self.get_parameter('max_range').value
@@ -245,6 +245,46 @@ class Driver(Node):
         )
 
         # ----------------------------------------------------------
+        # Dynamic target speed from upcoming route curvature.
+        # Look ahead along the route so we slow BEFORE a tight bend.
+        # ----------------------------------------------------------
+        n = len(self.route)
+
+        max_turn = 0.0
+
+        # Each 4-index segment is roughly 0.8 m on this centerline.
+        # Scan approximately the next 5 m of route.
+        for offset in range(4, 25, 4):
+            i0 = (nearest_index + offset - 4) % n
+            i1 = (nearest_index + offset) % n
+            i2 = (nearest_index + offset + 4) % n
+
+            v1 = self.route[i1] - self.route[i0]
+            v2 = self.route[i2] - self.route[i1]
+
+            h1 = np.arctan2(v1[1], v1[0])
+            h2 = np.arctan2(v2[1], v2[0])
+
+            dh = np.arctan2(
+                np.sin(h2 - h1),
+                np.cos(h2 - h1),
+            )
+
+            max_turn = max(max_turn, abs(dh))
+
+
+        # Straight / gentle section
+        target_speed_cmd = self.target_speed
+
+        # Medium corner
+        if max_turn > 0.20:
+            target_speed_cmd = min(target_speed_cmd, 2.45)
+
+        # Tight corner                  
+        if max_turn > 0.40:
+            target_speed_cmd = min(target_speed_cmd, 2.45)
+
+        # ----------------------------------------------------------
         # 2. Walk forward along the closed route until lookahead.
         # ----------------------------------------------------------
         accumulated = 0.0
@@ -369,7 +409,7 @@ class Driver(Node):
         # Use feed-forward + proportional correction initially.
         # ----------------------------------------------------------
         speed_error = (
-            self.target_speed
+            target_speed_cmd
             - self.speed
         )
 
@@ -379,7 +419,7 @@ class Driver(Node):
 
         else:
             feedforward = (
-                0.05 * self.target_speed
+                0.05 * target_speed_cmd
             )
 
             throttle = (
@@ -411,7 +451,7 @@ class Driver(Node):
                 f'target={target_index}, '
                 f'cte={cte:.2f}m, '
                 f'v={self.speed:.2f}, '
-                f'v_target={self.target_speed:.2f}, '
+                f'v_target={target_speed_cmd:.2f}, '
                 f'steer={steering:+.2f}, '
                 f'throttle={throttle:.2f}'
             )
