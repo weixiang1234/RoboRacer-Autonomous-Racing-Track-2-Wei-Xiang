@@ -250,11 +250,17 @@ class Driver(Node):
         # ----------------------------------------------------------
         n = len(self.route)
 
+        # ----------------------------------------------------------
+        # Preview upcoming route geometry.
+        # ----------------------------------------------------------
         max_turn = 0.0
+        corner_distance = None
 
-        # Each 4-index segment is roughly 0.8 m on this centerline.
-        # Scan approximately the next 5 m of route.
+        distance_ahead = 0.0
+
+        # Examine roughly the next 5 m.
         for offset in range(4, 25, 4):
+
             i0 = (nearest_index + offset - 4) % n
             i1 = (nearest_index + offset) % n
             i2 = (nearest_index + offset + 4) % n
@@ -270,19 +276,66 @@ class Driver(Node):
                 np.cos(h2 - h1),
             )
 
-            max_turn = max(max_turn, abs(dh))
+            turn = abs(dh)
 
+            max_turn = max(
+                max_turn,
+                turn,
+            )
 
-        # Straight / gentle section
+            # Approximate route distance represented by this interval.
+            segment_length = float(
+                np.linalg.norm(
+                    self.route[i1]
+                    - self.route[i0]
+                )
+            )
+
+            distance_ahead += segment_length
+
+            # Record the FIRST meaningful upcoming corner.
+            if (
+                corner_distance is None
+                and turn > 0.20
+            ):
+                corner_distance = distance_ahead
+
+        # ----------------------------------------------------------
+        # Distance-aware corner speed planning.
+        # ----------------------------------------------------------
+
         target_speed_cmd = self.target_speed
 
-        # Medium corner
-        if max_turn > 0.20:
-            target_speed_cmd = min(target_speed_cmd, 2.45)
+        if corner_distance is not None:
 
-        # Tight corner                  
-        if max_turn > 0.40:
-            target_speed_cmd = min(target_speed_cmd, 2.45)
+            corner_speed = 2.45
+
+            # Our corner detector samples approximately 0.8 m
+            # ahead, so treat this as the corner-entry offset.
+            corner_entry_offset = 0.80
+
+            # Planned deceleration required to transition
+            # approximately 3.10 -> 2.45 m/s over ~4 m.
+            planned_decel = 0.45
+
+            distance_to_corner = max(
+                corner_distance - corner_entry_offset,
+                0.0,
+            )
+
+            allowed_speed = float(
+                np.sqrt(
+                    corner_speed ** 2
+                    + 2.0
+                    * planned_decel
+                    * distance_to_corner
+                )
+            )
+
+            target_speed_cmd = min(
+                self.target_speed,
+                allowed_speed,
+            )
 
         # ----------------------------------------------------------
         # 2. Walk forward along the closed route until lookahead.
@@ -449,12 +502,21 @@ class Driver(Node):
                 )
             )
 
+            if corner_distance is None:
+                corner_distance_text = "none"
+            else:
+                corner_distance_text = (
+                    f"{corner_distance:.2f}m"
+                )
+
             self.get_logger().info(
                 f'PP nearest={nearest_index}, '
                 f'target={target_index}, '
                 f'cte={cte:.2f}m, '
                 f'v={self.speed:.2f}, '
                 f'v_target={target_speed_cmd:.2f}, '
+                f'corner_dist={corner_distance_text}, '
+                f'max_turn={max_turn:.2f}, '
                 f'steer={steering:+.2f}, '
                 f'throttle={throttle:.2f}'
             )
