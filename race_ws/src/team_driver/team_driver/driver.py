@@ -110,7 +110,7 @@ class Driver(Node):
 
         self.declare_parameter(
             'centerline_csv',
-            '/hackathon/maps/icra26_compete_centerline.csv'
+            '/hackathon/maps/icra26_compete_racing_v1.csv'
         )
         self.declare_parameter('lookahead_distance', 0.75)
         self.declare_parameter('target_speed', 3.3)
