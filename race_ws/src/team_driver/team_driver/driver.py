@@ -113,7 +113,7 @@ class Driver(Node):
             '/hackathon/maps/icra26_compete_centerline.csv'
         )
         self.declare_parameter('lookahead_distance', 0.75)
-        self.declare_parameter('target_speed', 3.1)
+        self.declare_parameter('target_speed', 3.3)
 
         self.crawl_throttle = self.get_parameter('crawl_throttle').value
         self.max_range = self.get_parameter('max_range').value
