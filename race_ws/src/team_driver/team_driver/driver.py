@@ -413,7 +413,10 @@ class Driver(Node):
             - self.speed
         )
 
-        if speed_error < -0.20:
+        if speed_error < -0.50:
+            throttle = -0.03
+
+        elif speed_error < -0.20:
             # Slight overspeed: coast instead of braking.
             throttle = 0.0
 
