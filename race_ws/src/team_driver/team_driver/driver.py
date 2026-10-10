@@ -308,7 +308,7 @@ class Driver(Node):
 
         if corner_distance is not None:
 
-            corner_speed = 2.45
+            corner_speed = 2.6
 
             # Our corner detector samples approximately 0.8 m
             # ahead, so treat this as the corner-entry offset.
