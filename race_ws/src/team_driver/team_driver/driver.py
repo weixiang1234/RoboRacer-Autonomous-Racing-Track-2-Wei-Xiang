@@ -308,7 +308,11 @@ class Driver(Node):
 
         if corner_distance is not None:
 
-            corner_speed = 2.6
+            # Corner-speed target based on previewed turn severity.
+            if max_turn >= 0.45:
+                corner_speed = 2.70
+            else:
+                corner_speed = 2.80
 
             # Our corner detector samples approximately 0.8 m
             # ahead, so treat this as the corner-entry offset.
@@ -336,6 +340,11 @@ class Driver(Node):
                 self.target_speed,
                 allowed_speed,
             )
+
+        if corner_distance is None:
+            active_lookahead = 0.90
+        else:
+            active_lookahead = self.lookahead_distance
 
         # ----------------------------------------------------------
         # 2. Walk forward along the closed route until lookahead.
@@ -370,7 +379,7 @@ class Driver(Node):
 
             current_index = next_index
 
-            if accumulated < self.lookahead_distance:
+            if accumulated < active_lookahead:
                 continue
 
             tx = self.route[current_index, 0]
