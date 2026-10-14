@@ -151,6 +151,43 @@ class Driver(Node):
                 f'Failed to load centerline: {exc}'
             )
 
+        # Load the offline curvature-based speed profile.
+        # Fail immediately if the profile does not match our racing line.
+        profile_path = (
+            '/hackathon/maps/icra26_compete_speed_profile_v1.csv'
+        )
+
+        profile = np.loadtxt(
+            profile_path,
+            delimiter=',',
+            skiprows=1,
+            dtype=np.float64,
+        )
+
+        if self.route is None or profile.shape != (len(self.route), 7):
+            raise ValueError('Speed profile waypoint count mismatch')
+
+        if not np.allclose(
+            profile[:, 1:3],
+            self.route,
+            atol=0.0005,
+            rtol=0.0,
+        ):
+            raise ValueError('Speed profile racing-line coordinates mismatch')
+
+        self.speed_profile = profile[:, 6]
+
+        if (
+            not np.all(np.isfinite(self.speed_profile))
+            or np.any(self.speed_profile <= 0.0)
+        ):
+            raise ValueError('Invalid speed profile values')
+
+        self.get_logger().info(
+            f'Loaded speed profile: {len(self.speed_profile)} points'
+        )
+
+
         ns = str(self.get_parameter('vehicle_ns').value).rstrip('/')
         qos = devkit_qos()
 
@@ -340,6 +377,18 @@ class Driver(Node):
                 self.target_speed,
                 allowed_speed,
             )
+
+        # Experimental speed-profile integration.
+        # Preserve baseline braking behaviour with a modest uplift.
+        speed_uplift = (
+            0.10 if corner_distance is not None else 0.0
+        )
+
+        target_speed_cmd = min(
+            self.target_speed,
+            target_speed_cmd + speed_uplift,
+            float(self.speed_profile[nearest_index]),
+        )
 
         if corner_distance is None:
             active_lookahead = 0.90
