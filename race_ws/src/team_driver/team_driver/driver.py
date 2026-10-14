@@ -390,6 +390,14 @@ class Driver(Node):
             float(self.speed_profile[nearest_index]),
         )
 
+        # Experimental straight-line speed boost.
+        # Apply only when no significant corner is detected ahead.
+        if corner_distance is None and max_turn < 0.12:
+            target_speed_cmd = min(
+                self.target_speed + 0.10,
+                float(self.speed_profile[nearest_index]) + 0.10,
+            )
+
         if corner_distance is None:
             active_lookahead = 0.90
         else:
