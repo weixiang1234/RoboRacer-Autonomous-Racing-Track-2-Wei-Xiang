@@ -489,7 +489,7 @@ class Driver(Node):
 
             throttle = (
                 feedforward
-                + 0.12 * speed_error
+                + 0.14 * speed_error
             )
 
             throttle = float(
